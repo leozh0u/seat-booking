@@ -11,7 +11,7 @@ def hold_seat(seat_id: int, user_id: str) -> bool:
             """
             UPDATE event_seats
             SET status = 'held', held_by = %s, held_until = now() + interval '5 minutes'
-            WHERE id = %s AND status = 'available'
+            WHERE id = %s AND (status = 'available' OR (status = 'held' AND held_until < now()))
             """,
             (user_id, seat_id),
         )
