@@ -1,0 +1,48 @@
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from hold_seat import hold_seat
+import redis.asyncio as aioredis
+import asyncio
+import json
+
+app = FastAPI()
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
+
+manager = ConnectionManager()
+
+@app.post("/seats/{seat_id}/hold")
+async def hold(seat_id: int, user_id: str):
+    won = hold_seat(seat_id, user_id)
+    if won:
+        r = aioredis.from_url("redis://localhost")
+        await r.publish("seat_updates", json.dumps({"seat_id": seat_id, "status": "held", "user_id": user_id}))
+        await r.aclose()
+    return {"held": won}
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    r = aioredis.from_url("redis://localhost")
+    pubsub = r.pubsub()
+    await pubsub.subscribe("seat_updates")
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                await manager.broadcast(message["data"].decode())
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    finally:
+        await r.aclose()
