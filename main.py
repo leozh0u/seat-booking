@@ -7,7 +7,7 @@ import os
 
 import sentry_sdk
 sentry_sdk.init(
-    dsn="https://18eafdc3d46c72e6147fa51ebe79bce1@o4511658894491648.ingest.us.sentry.io/4511658917691392",
+    dsn=os.environ.get("SENTRY_DSN"),
     send_default_pii=True,
 )
 
