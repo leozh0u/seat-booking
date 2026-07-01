@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from hold_seat import hold_seat
 import redis.asyncio as aioredis
 import json
+import os
 
 app = FastAPI()
 
@@ -12,6 +13,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost")
 
 class ConnectionManager:
     def __init__(self):
@@ -41,7 +44,7 @@ manager = ConnectionManager()
 async def hold(seat_id: int, user_id: str):
     won = hold_seat(seat_id, user_id)
     if won:
-        r = aioredis.from_url("redis://localhost")
+        r = aioredis.from_url(REDIS_URL)
         await r.publish("seat_updates", json.dumps({"seat_id": seat_id, "status": "held", "user_id": user_id}))
         await r.aclose()
     return {"held": won}
@@ -49,7 +52,7 @@ async def hold(seat_id: int, user_id: str):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-    r = aioredis.from_url("redis://localhost")
+    r = aioredis.from_url(REDIS_URL)
     pubsub = r.pubsub()
     await pubsub.subscribe("seat_updates")
     try:
