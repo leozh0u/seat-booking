@@ -26,3 +26,4 @@ watchfiles==1.2.0
 websockets==16.0
 redis==8.0.1
 
+sentry-sdk==2.64.0
