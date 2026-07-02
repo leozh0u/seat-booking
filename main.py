@@ -2,6 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from hold_seat import hold_seat
 import redis.asyncio as aioredis
+from hold_seat import hold_seat, confirm_seat
 import json
 import os
 
@@ -54,6 +55,15 @@ async def hold(seat_id: int, user_id: str):
         await r.publish("seat_updates", json.dumps({"seat_id": seat_id, "status": "held", "user_id": user_id}))
         await r.aclose()
     return {"held": won}
+
+@app.post("/seats/{seat_id}/confirm")
+async def confirm(seat_id: int, user_id: str, idempotency_key: str):
+    result = confirm_seat(seat_id, user_id, idempotency_key)
+    if result["confirmed"] and not result["replay"]:
+        r = aioredis.from_url(REDIS_URL)
+        await r.publish("seat_updates", json.dumps({"seat_id": seat_id, "status": "booked", "user_id": user_id}))
+        await r.aclose()
+    return result
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

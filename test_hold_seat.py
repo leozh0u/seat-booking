@@ -2,8 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import psycopg
 from db import DATABASE_URL
-from hold_seat import hold_seat
-
+from hold_seat import hold_seat, confirm_seat
 
 def reset_seat():
     """Wipe and recreate one known seat, status available, return its id."""
@@ -60,3 +59,13 @@ def test_expired_hold_reclaimed():
         results = list(executor.map(try_hold, user_ids))
 
     assert results.count(True) == 1
+
+def test_confirm_idempotent():
+    seat_id = reset_seat()
+    hold_seat(seat_id, "userA")
+
+    result1 = confirm_seat(seat_id, "userA", "key123")
+    assert result1 == {"confirmed": True, "replay": False}
+
+    result2 = confirm_seat(seat_id, "userA", "key123")
+    assert result2 == {"confirmed": True, "replay": True}
