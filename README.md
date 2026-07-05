@@ -1,52 +1,86 @@
-- **Postgres** — stores seat state; atomic UPDATE prevents double-booking
-- **Redis** — pub/sub message bus; broadcasts seat changes to all connected clients
-- **WebSockets** — pushes real-time seat updates to every open browser
-- **React** — seat map UI; seats turn red instantly when booked
+# SeatLive
 
-## Technical Highlights
+Real-time event seat-booking platform. Solves the core hard problem in any booking system: preventing double-booked seats under concurrent load, using an atomic conditional UPDATE in Postgres rather than application-level locking.
 
-- Atomic conditional UPDATE in Postgres prevents double-booking under concurrent load
-- Concurrency test fires N simultaneous requests at one seat and asserts exactly one wins
-- Redis pub/sub decouples booking logic from notification — multi-server safe
-- WebSocket connections subscribe to Redis independently, enabling horizontal scaling
-- Dockerized with Docker Compose — entire stack spins up with `docker compose up`
-- GitHub Actions CI runs the test suite on every push
+## Architecture
+
+```
+┌──────────────┐      HTTP       ┌──────────────┐
+│  React (5173) │ ───────────────▶│ FastAPI (8000)│
+└──────┬───────┘                 └──────┬───────┘
+       │  WebSocket                     │
+       │                          ┌─────▼─────┐
+       │                          │ PostgreSQL │  ← atomic UPDATE,
+       │                          │  (5432)    │    row-level locking
+       │                          └─────┬─────┘
+       │                                │
+       │                          ┌─────▼─────┐
+       └─────────────────────────▶│   Redis    │  pub/sub broadcast
+          seat_updates channel    │  (6379)    │
+                                  └────────────┘
+```
+
+Flow: client holds a seat → atomic UPDATE wins or loses → winner publishes to Redis → every server instance's WebSocket handler is subscribed and broadcasts to its own connected clients → all browsers update instantly, no polling.
+
+## Core correctness guarantee
+
+```sql
+UPDATE event_seats
+SET status = 'held', held_by = %s, held_until = now() + interval '5 minutes'
+WHERE id = %s AND (status = 'available' OR (status = 'held' AND held_until < now()))
+```
+
+The check and the mutation are the same statement — no gap between "is it available?" and "mark it held." Postgres serializes concurrent writes to the same row via row-level locking, so exactly one concurrent request wins. Verified under 50-thread `threading.Barrier` load in `test_hold_seat.py`.
 
 ## Stack
 
-- **Backend:** Python, FastAPI, psycopg
+- **Backend:** Python 3.14, FastAPI, psycopg
 - **Database:** PostgreSQL
-- **Cache/Pub-sub:** Redis
-- **Frontend:** React, Vite
-- **DevOps:** Docker, Docker Compose, GitHub Actions, Sentry
+- **Real-time:** Redis pub/sub, WebSockets
+- **Frontend:** React + Vite
+- **Infra:** Docker Compose, GitHub Actions CI, Sentry error monitoring
+- **Load testing:** Locust
 
-## Running Locally
-
-### Without Docker
+## Local setup
 
 ```bash
-# Install dependencies
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-# Apply schema
-python setup_db.py
-
-# Start backend
-uvicorn main:app --reload
-
-# Start frontend (separate terminal)
-cd frontend && npm install && npm run dev
+git clone https://github.com/leozh0u/seat-booking.git
+cd seat-booking
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt --break-system-packages
 ```
 
-### With Docker
+Start Postgres and Redis locally (Postgres.app + `brew services start redis`), or via Docker:
 
 ```bash
 docker compose up
-
-# One-time: apply schema
-DATABASE_URL=postgresql://postgres:postgres@localhost:5433/postgres python setup_db.py
 ```
+
+Run the backend:
+
+```bash
+export PATH="/Applications/Postgres.app/Contents/Versions/latest/bin:$PATH"
+python3.14 -m uvicorn main:app --reload
+```
+
+Run the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Backend on `:8000`, frontend on `:5173`.
+
+## API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/seats/{seat_id}/hold` | POST | Atomically hold a seat (rate-limited, validated) |
+| `/seats/{seat_id}/confirm` | POST | Convert a hold into a booking, idempotent via client-supplied key |
+| `/ws` | WebSocket | Real-time seat status broadcast |
 
 ## Testing
 
@@ -54,4 +88,14 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5433/postgres python setup
 pytest test_hold_seat.py -v
 ```
 
-The concurrency test fires multiple simultaneous requests at a single seat and asserts exactly one succeeds.
+Covers: single-winner correctness under 50-thread concurrent load, expired-hold reclamation under concurrency, and confirm idempotency/replay detection.
+
+## Load testing
+
+See [`LOAD_TESTING.md`](./LOAD_TESTING.md) for real Locust results: 4459 requests, 0 failures, 18.7 req/s, p95 570ms.
+
+## Known limitations
+
+- Confirm idempotency key is not scoped per-user — a key collision across two different users' clients would leak one confirm result to the other. Low risk with UUIDs, real tradeoff.
+- DB calls are synchronous (psycopg) inside async endpoints, briefly blocking the event loop under load. An async driver would remove this.
+- No structured logging yet — Sentry covers unhandled exceptions but there's no request/response audit trail.
