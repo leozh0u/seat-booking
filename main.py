@@ -1,6 +1,5 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
-from hold_seat import hold_seat
 import redis.asyncio as aioredis
 from hold_seat import hold_seat, confirm_seat
 import json
@@ -12,7 +11,17 @@ sentry_sdk.init(
     send_default_pii=True,
 )
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 app = FastAPI()
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,7 +57,12 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 @app.post("/seats/{seat_id}/hold")
-async def hold(seat_id: int, user_id: str):
+@limiter.limit("10/minute")
+async def hold(
+    request: Request,
+    seat_id: int = Path(..., ge=1, le=8),
+    user_id: str = Query(..., min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$"),
+):
     won = hold_seat(seat_id, user_id)
     if won:
         r = aioredis.from_url(REDIS_URL)
@@ -57,7 +71,13 @@ async def hold(seat_id: int, user_id: str):
     return {"held": won}
 
 @app.post("/seats/{seat_id}/confirm")
-async def confirm(seat_id: int, user_id: str, idempotency_key: str):
+@limiter.limit("10/minute")
+async def confirm(
+    request: Request,
+    seat_id: int = Path(..., ge=1, le=8),
+    user_id: str = Query(..., min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$"),
+    idempotency_key: str = Query(..., min_length=1, max_length=200),
+):
     result = confirm_seat(seat_id, user_id, idempotency_key)
     if result["confirmed"] and not result["replay"]:
         r = aioredis.from_url(REDIS_URL)
