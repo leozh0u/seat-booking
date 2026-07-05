@@ -6,5 +6,6 @@ CREATE TABLE IF NOT EXISTS event_seats (
               CHECK (status IN ('available','held','booked')),
   held_by     TEXT,
   held_until  TIMESTAMPTZ,
+  idempotency_key TEXT,
   UNIQUE (event_id, seat_label)
 );
