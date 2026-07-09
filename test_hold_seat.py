@@ -69,3 +69,28 @@ def test_confirm_idempotent():
 
     result2 = confirm_seat(seat_id, "userA", "key123")
     assert result2 == {"confirmed": True, "replay": True}
+
+
+def test_confirm_rejects_expired_hold():
+    """A hold past its TTL cannot be converted into a booking."""
+    with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
+        conn.execute("DELETE FROM event_seats WHERE event_id = 1")
+        cur = conn.execute(
+            """
+            INSERT INTO event_seats (event_id, seat_label, status, held_by, held_until)
+            VALUES (1, 'A1', 'held', 'userA', now() - interval '1 minute')
+            RETURNING id
+            """
+        )
+        seat_id = cur.fetchone()[0]
+
+    result = confirm_seat(seat_id, "userA", "key123")
+    assert result == {"confirmed": False, "replay": False}
+
+
+def test_confirm_rejects_wrong_user():
+    seat_id = reset_seat()
+    hold_seat(seat_id, "userA")
+
+    result = confirm_seat(seat_id, "userB", "key456")
+    assert result == {"confirmed": False, "replay": False}

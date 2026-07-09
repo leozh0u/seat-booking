@@ -1,12 +1,27 @@
 import { useState, useEffect, useRef } from 'react'
 
 const SEAT_IDS = [1, 2, 3, 4, 5, 6, 7, 8]
+const USER_ID = `user_${crypto.randomUUID().slice(0, 8)}`
 
 function App() {
   const [seats, setSeats] = useState(
     Object.fromEntries(SEAT_IDS.map(id => [id, 'available']))
   )
+  const [message, setMessage] = useState('')
   const wsRef = useRef(null)
+
+  useEffect(() => {
+    fetch('http://localhost:8000/seats')
+      .then(res => res.json())
+      .then(data => {
+        setSeats(prev => {
+          const next = { ...prev }
+          for (const seat of data) next[seat.seat_id] = seat.status
+          return next
+        })
+      })
+      .catch(err => console.log('Failed to fetch initial seats:', err))
+  }, [])
 
   useEffect(() => {
     function connect() {
@@ -42,18 +57,17 @@ function App() {
   }, [])
 
   const holdSeat = async (seatId) => {
-    const res = await fetch(`http://localhost:8000/seats/${seatId}/hold?user_id=user_1`, {
+    const res = await fetch(`http://localhost:8000/seats/${seatId}/hold?user_id=${USER_ID}`, {
       method: 'POST'
     })
     const data = await res.json()
-    if (!data.held) {
-      alert('Seat already taken!')
-    }
+    setMessage(data.held ? `Seat ${seatId} held by you (${USER_ID})` : `Seat ${seatId} already taken`)
   }
 
   return (
     <div style={{ padding: '2rem' }}>
       <h1>SeatLive</h1>
+      {message && <p>{message}</p>}
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
         {SEAT_IDS.map(id => (
           <button

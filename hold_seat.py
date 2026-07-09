@@ -1,12 +1,14 @@
-import psycopg
+from psycopg_pool import ConnectionPool
 from db import DATABASE_URL
+
+pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=10, open=True)
 
 def hold_seat(seat_id: int, user_id: str) -> bool:
     """
     Try to put a hold on a seat. Returns True if this call won the seat,
     False if someone else already holds/booked it.
     """
-    with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
+    with pool.connection() as conn:
         cur = conn.execute(
             """
             UPDATE event_seats
@@ -18,22 +20,42 @@ def hold_seat(seat_id: int, user_id: str) -> bool:
         return cur.rowcount == 1
 
 def confirm_seat(seat_id: int, user_id: str, idempotency_key: str) -> dict:
-    with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
-        # check if this idempotency key already processed this seat
-        row = conn.execute(
-            "SELECT status, idempotency_key FROM event_seats WHERE id = %s",
-            (seat_id,),
-        ).fetchone()
-
-        if row and row[1] == idempotency_key:
-            return {"confirmed": row[0] == "booked", "replay": True}
-
+    with pool.connection() as conn:
+        # Atomic confirm: the hold must belong to this user, still be live,
+        # and not already carry this idempotency key.
         cur = conn.execute(
             """
             UPDATE event_seats
             SET status = 'booked', idempotency_key = %s
             WHERE id = %s AND status = 'held' AND held_by = %s
+              AND held_until >= now()
+              AND idempotency_key IS DISTINCT FROM %s
             """,
-            (idempotency_key, seat_id, user_id),
+            (idempotency_key, seat_id, user_id, idempotency_key),
         )
-        return {"confirmed": cur.rowcount == 1, "replay": False}
+        if cur.rowcount == 1:
+            return {"confirmed": True, "replay": False}
+
+        # Didn't update: either a replay of an already-processed key, or a
+        # genuine failure (expired hold, wrong user, seat not held).
+        row = conn.execute(
+            "SELECT status, idempotency_key FROM event_seats WHERE id = %s",
+            (seat_id,),
+        ).fetchone()
+        if row and row[1] == idempotency_key:
+            return {"confirmed": row[0] == "booked", "replay": True}
+        return {"confirmed": False, "replay": False}
+
+def get_seats() -> list[dict]:
+    """Current state of all seats; expired holds are reported as available."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id,
+                   CASE WHEN status = 'held' AND held_until < now()
+                        THEN 'available' ELSE status END
+            FROM event_seats
+            ORDER BY id
+            """
+        ).fetchall()
+        return [{"seat_id": r[0], "status": r[1]} for r in rows]

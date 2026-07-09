@@ -20,7 +20,7 @@ Real-time event seat-booking platform. Solves the core hard problem in any booki
                                   └────────────┘
 ```
 
-Flow: client holds a seat → atomic UPDATE wins or loses → winner publishes to Redis → every server instance's WebSocket handler is subscribed and broadcasts to its own connected clients → all browsers update instantly, no polling.
+Flow: client holds a seat → atomic UPDATE wins or loses → winner publishes to Redis → each server instance runs a single background subscriber that broadcasts to its own connected clients → all browsers update instantly, no polling.
 
 ## Core correctness guarantee
 
@@ -34,7 +34,7 @@ The check and the mutation are the same statement — no gap between "is it avai
 
 ## Stack
 
-- **Backend:** Python 3.14, FastAPI, psycopg
+- **Backend:** Python 3.12+, FastAPI, psycopg (pooled via psycopg_pool)
 - **Database:** PostgreSQL
 - **Real-time:** Redis pub/sub, WebSockets
 - **Frontend:** React + Vite
@@ -46,9 +46,9 @@ The check and the mutation are the same statement — no gap between "is it avai
 ```bash
 git clone https://github.com/leozh0u/seat-booking.git
 cd seat-booking
-python3.14 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt --break-system-packages
+pip install -r requirements.txt
 ```
 
 Start Postgres and Redis locally (Postgres.app + `brew services start redis`), or via Docker:
@@ -57,11 +57,11 @@ Start Postgres and Redis locally (Postgres.app + `brew services start redis`), o
 docker compose up
 ```
 
-Run the backend:
+Apply the schema, then run the backend:
 
 ```bash
-export PATH="/Applications/Postgres.app/Contents/Versions/latest/bin:$PATH"
-python3.14 -m uvicorn main:app --reload
+python setup_db.py
+uvicorn main:app --reload
 ```
 
 Run the frontend:
@@ -78,6 +78,7 @@ Backend on `:8000`, frontend on `:5173`.
 
 | Endpoint | Method | Description |
 |---|---|---|
+| `/seats` | GET | Current status of all seats (expired holds reported as available) |
 | `/seats/{seat_id}/hold` | POST | Atomically hold a seat (rate-limited, validated) |
 | `/seats/{seat_id}/confirm` | POST | Convert a hold into a booking, idempotent via client-supplied key |
 | `/ws` | WebSocket | Real-time seat status broadcast |
@@ -97,5 +98,5 @@ See [`LOAD_TESTING.md`](./LOAD_TESTING.md) for real Locust results: 4459 request
 ## Known limitations
 
 - Confirm idempotency key is not scoped per-user — a key collision across two different users' clients would leak one confirm result to the other. Low risk with UUIDs, real tradeoff.
-- DB calls are synchronous (psycopg) inside async endpoints, briefly blocking the event loop under load. An async driver would remove this.
+- DB calls are synchronous (psycopg, pooled) inside async endpoints, briefly blocking the event loop under load. An async driver would remove this.
 - No structured logging yet — Sentry covers unhandled exceptions but there's no request/response audit trail.
