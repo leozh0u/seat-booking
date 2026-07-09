@@ -3,6 +3,9 @@ import json
 import os
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 import redis.asyncio as aioredis
