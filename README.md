@@ -30,7 +30,7 @@ SET status = 'held', held_by = %s, held_until = now() + interval '5 minutes'
 WHERE id = %s AND (status = 'available' OR (status = 'held' AND held_until < now()))
 ```
 
-The check and the mutation are the same statement — no gap between "is it available?" and "mark it held." Postgres serializes concurrent writes to the same row via row-level locking, so exactly one concurrent request wins. Verified under 50-thread `threading.Barrier` load in `test_hold_seat.py`.
+The check and the mutation are the same statement, so there is no gap between "is it available?" and "mark it held." Postgres serializes concurrent writes to the same row via row-level locking, so exactly one concurrent request wins. Verified under 50-thread `threading.Barrier` load in `test_hold_seat.py`.
 
 ## Stack
 
@@ -97,6 +97,6 @@ See [`LOAD_TESTING.md`](./LOAD_TESTING.md) for real Locust results: 4459 request
 
 ## Known limitations
 
-- Confirm idempotency key is not scoped per-user — a key collision across two different users' clients would leak one confirm result to the other. Low risk with UUIDs, real tradeoff.
+- Confirm idempotency key is not scoped per user: a key collision across two different users' clients would leak one confirm result to the other. Low risk with UUIDs, real tradeoff.
 - DB calls are synchronous (psycopg, pooled) inside async endpoints, briefly blocking the event loop under load. An async driver would remove this.
-- No structured logging yet — Sentry covers unhandled exceptions but there's no request/response audit trail.
+- No structured logging yet. Sentry covers unhandled exceptions but there's no request/response audit trail.
